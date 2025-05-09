@@ -89,6 +89,7 @@
     .player-container {
       margin-top: var(--spacing-md);
       margin-bottom: var(--spacing-md);
+      position: relative;
     }
 
     input, button, select {
@@ -253,6 +254,41 @@
       font-size: 0.85rem;
     }
 
+    .error-actions {
+      display: flex;
+      gap: var(--spacing-sm);
+      margin-top: var(--spacing-md);
+    }
+
+    .error-solution {
+      background-color: rgba(255, 255, 255, 0.05);
+      padding: var(--spacing-sm);
+      border-radius: var(--border-radius-sm);
+      margin-top: var(--spacing-sm);
+      font-size: 0.9rem;
+    }
+
+    .error-solution ul {
+      margin-left: var(--spacing-md);
+      margin-top: var(--spacing-xs);
+    }
+
+    .recovery-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background-color: orange;
+      margin-right: 5px;
+      animation: blink 1s infinite;
+    }
+
+    @keyframes blink {
+      0% { opacity: 0.3; }
+      50% { opacity: 1; }
+      100% { opacity: 0.3; }
+    }
+
     .tabs {
       display: flex;
       border-bottom: 1px solid var(--border-color);
@@ -291,6 +327,29 @@
 
     .stream-quality p {
       margin-bottom: var(--spacing-xs);
+    }
+
+    .player-clock {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 4px 8px;
+      border-radius: var(--border-radius-sm);
+      font-size: 0.9rem;
+      z-index: 5;
+      font-family: monospace;
+      font-weight: 600;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .player-clock .clock-icon {
+      opacity: 0.8;
+      font-size: 0.8rem;
     }
 
     footer {
@@ -345,12 +404,21 @@
       
       <div class="player-container">
         <video id="video" controls></video>
+        <div class="player-clock">
+          <span class="clock-icon">⏱</span>
+          <span id="vn-clock">--:--:--</span>
+        </div>
       </div>
     </div>
 
     <div class="error-container" id="error-container">
       <h3>Lỗi phát sinh:</h3>
       <div id="error-details"></div>
+      <div class="error-solution" id="error-solution"></div>
+      <div class="error-actions">
+        <button onclick="recoverStream()">Thử khắc phục</button>
+        <button class="secondary" onclick="changeSettings()">Đổi cài đặt</button>
+      </div>
     </div>
 
     <div class="tabs">
@@ -420,6 +488,23 @@
     
     // Khởi tạo lịch sử
     let history = JSON.parse(localStorage.getItem('m3u8History')) || [];
+    
+    // Đồng hồ Việt Nam
+    function updateClock() {
+      const now = new Date();
+      // Chuyển đổi sang múi giờ Việt Nam (UTC+7)
+      const vnTime = new Date(now.getTime() + (7 * 60 * 60 * 1000 - now.getTimezoneOffset() * 60 * 1000));
+      
+      const hours = vnTime.getHours().toString().padStart(2, '0');
+      const minutes = vnTime.getMinutes().toString().padStart(2, '0');
+      const seconds = vnTime.getSeconds().toString().padStart(2, '0');
+      
+      document.getElementById('vn-clock').textContent = `${hours}:${minutes}:${seconds}`;
+    }
+    
+    // Cập nhật đồng hồ mỗi giây
+    setInterval(updateClock, 1000);
+    updateClock(); // Cập nhật ngay lập tức
     
     // Hiển thị lịch sử
     function renderHistory() {
@@ -573,6 +658,7 @@
     function showError(title, details) {
       const errorContainer = document.getElementById('error-container');
       const errorDetails = document.getElementById('error-details');
+      const errorSolution = document.getElementById('error-solution');
       
       errorContainer.style.display = 'block';
       errorDetails.innerHTML = `<p><strong>${title}</strong></p>`;
@@ -580,148 +666,171 @@
       if (details) {
         errorDetails.innerHTML += `<pre>${JSON.stringify(details, null, 2)}</pre>`;
       }
+
+      // Hiển thị gợi ý giải pháp dựa trên loại lỗi
+      let solutionHtml = '';
+      
+      if (details && details.type === 'mediaError') {
+        solutionHtml = `
+          <p><strong>Giải pháp có thể:</strong></p>
+          <ul>
+            <li>Kiểm tra lại URL stream (có thể URL đã hết hạn)</li>
+            <li>Kiểm tra kết nối mạng của bạn</li>
+            <li>Stream có thể yêu cầu quyền truy cập (CORS/cookie)</li>
+            <li>Thử chuyển sang phiên bản HLS.js khác</li>
+            <li>Liên hệ quản trị viên nếu đây là stream nội bộ</li>
+          </ul>
+        `;
+        
+        // Tự động thử khôi phục với lỗi media
+        setTimeout(() => recoverStream(), 2000);
+      } else if (details && details.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        solutionHtml = `
+          <p><strong>Giải pháp có thể:</strong></p>
+          <ul>
+            <li>Kiểm tra kết nối internet của bạn</li>
+            <li>Kiểm tra URL có chính xác không</li>
+            <li>Server stream có thể đang quá tải</li>
+            <li>Có thể stream yêu cầu xác thực</li>
+            <li>Thử truy cập vào URL trực tiếp để xem lỗi chi tiết</li>
+          </ul>
+        `;
+      } else {
+        solutionHtml = `
+          <p><strong>Giải pháp chung:</strong></p>
+          <ul>
+            <li>Làm mới trang và thử lại</li>
+            <li>Kiểm tra URL stream có đúng định dạng .m3u8 không</li>
+            <li>Thử mở stream trên các trình phát khác</li>
+          </ul>
+        `;
+      }
+      
+      errorSolution.innerHTML = solutionHtml;
     }
     
     // Ẩn thông tin lỗi
     function hideError() {
       document.getElementById('error-container').style.display = 'none';
     }
-    
-    // Chuyển đổi tab
-    function switchTab(tabName) {
-      // Xóa trạng thái active cho tất cả tab
-      document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-      
-      // Thêm active cho tab được chọn
-      document.querySelector(`.tab:nth-child(${tabName === 'history' ? 1 : (tabName === 'info' ? 2 : 3)})`).classList.add('active');
-      document.getElementById(`${tabName}-tab`).classList.add('active');
+
+    // Mở tab cài đặt
+    function changeSettings() {
+      switchTab('settings');
     }
-    
-    // Cập nhật thông tin stream
-    function updateStreamInfo(manifest) {
-      const streamInfo = document.getElementById('stream-info');
+
+    // Thử khắc phục stream
+    let recoveryAttempts = 0;
+    const MAX_RECOVERY_ATTEMPTS = 3;
+
+    function recoverStream() {
+      const url = document.getElementById('m3u8-url').value.trim();
+      if (!url) return;
       
-      if (!manifest || !manifest.levels) {
-        streamInfo.innerHTML = '<p>Không có thông tin stream.</p>';
+      if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS) {
+        showError("Đã thử khắc phục nhiều lần không thành công", 
+          {message: "Vui lòng kiểm tra lại URL hoặc thử các cài đặt khác"});
+        recoveryAttempts = 0;
         return;
       }
       
-      let infoHTML = '<div>';
+      recoveryAttempts++;
       
-      infoHTML += `<p><strong>Số lượng chất lượng:</strong> ${manifest.levels.length}</p>`;
+      // Thêm indicator đang khôi phục
+      const errorDetails = document.getElementById('error-details');
+      errorDetails.innerHTML += `
+        <p style="margin-top: 10px;">
+          <span class="recovery-indicator"></span>
+          Đang thử khắc phục lần ${recoveryAttempts}/${MAX_RECOVERY_ATTEMPTS}...
+        </p>
+      `;
       
-      manifest.levels.forEach((level, index) => {
-        infoHTML += `
-          <div class="stream-quality">
-            <p><strong>Chất lượng #${index + 1}:</strong></p>
-            <p>Độ phân giải: ${level.width}x${level.height}</p>
-            <p>Bitrate: ${Math.round(level.bitrate / 1000)} kbps</p>
-            <p>Codec: ${level.codecSet || 'Không rõ'}</p>
-          </div>
-        `;
-      });
-      
-      infoHTML += '</div>';
-      streamInfo.innerHTML = infoHTML;
-    }
-
-    function loadStream() {
-      // Hủy instance HLS hiện tại nếu có
+      // Hủy instance hiện tại
       if (currentHls) {
         currentHls.destroy();
         currentHls = null;
       }
       
-      const url = document.getElementById('m3u8-url').value.trim();
-      if (!url) {
-        alert('Vui lòng nhập URL .m3u8');
-        return;
-      }
+      // Khởi tạo lại với cài đặt khác
+      const hlsConfig = {
+        debug: true,
+        // Các cài đặt để tăng khả năng phục hồi
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        maxBufferSize: 60 * 1000 * 1000, // 60MB
+        maxBufferHole: 0.5,
+        lowLatencyMode: false,
+        // Số lần thử lại
+        manifestLoadingMaxRetry: 6,
+        manifestLoadingRetryDelay: 1000,
+        levelLoadingMaxRetry: 6,
+        levelLoadingRetryDelay: 1000,
+        fragLoadingMaxRetry: 6,
+        fragLoadingRetryDelay: 1000
+      };
       
-      // Ẩn thông báo lỗi cũ
-      hideError();
-      
-      // Cập nhật thông tin stream
-      document.getElementById('stream-info').innerHTML = '<p>Đang tải thông tin stream...</p>';
-      
-      // Thêm vào lịch sử
-      addToHistory(url);
-      
-      // Cập nhật hash
-      updateUrlHash(url);
-
-      if (Hls.isSupported()) {
-        const hls = new Hls({
-          debug: true
-        });
-        
-        currentHls = hls;
-        hls.loadSource(url);
-        hls.attachMedia(video);
-        
-        hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
-          if (settings.autoplay) {
-            video.play().catch(e => {
-              console.warn('Không thể tự động phát: ', e);
-              showError('Không thể tự động phát', 
-                'Trình duyệt chặn tự động phát. Hãy nhấn nút play trên video để bắt đầu.');
-            });
-          }
+      try {
+        if (Hls.isSupported()) {
+          const hls = new Hls(hlsConfig);
+          currentHls = hls;
           
-          updateStreamInfo(hls.manifest);
-        });
-        
-        hls.on(Hls.Events.ERROR, function (event, data) {
-          console.error('HLS error:', data);
+          hls.loadSource(url);
+          hls.attachMedia(video);
           
-          let errorMsg = 'Không thể phát luồng HLS.';
-          let details = null;
-          
-          if (data.fatal) {
-            switch(data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                errorMsg = 'Lỗi mạng khi tải stream.';
-                details = {
-                  url: data.url,
-                  response: data.response ? 
-                    { code: data.response.code, text: data.response.text } : 'Không có phản hồi'
-                };
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                errorMsg = 'Lỗi media. Stream không hợp lệ hoặc bị hỏng.';
-                break;
-              default:
-                errorMsg = 'Lỗi không xác định.';
-                break;
+          hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
+            hideError();
+            recoveryAttempts = 0;
+            
+            if (settings.autoplay) {
+              video.play().catch(e => {
+                console.warn('Không thể tự động phát: ', e);
+              });
             }
             
-            showError(errorMsg, {
-              type: data.type,
-              details: data.details,
-              ...details
-            });
-          }
-        });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = url;
-        video.addEventListener('loadedmetadata', function () {
-          if (settings.autoplay) {
-            video.play();
-          }
-          document.getElementById('stream-info').innerHTML = 
-            '<p>Đang sử dụng trình phát HLS tích hợp trình duyệt. Thông tin chi tiết không khả dụng.</p>';
-        });
-        
-        video.addEventListener('error', function(e) {
-          console.error('Video error:', video.error);
-          showError('Không thể phát video', {
-            code: video.error ? video.error.code : 'Không rõ',
-            message: video.error ? video.error.message : 'Không rõ'
+            updateStreamInfo(hls.manifest);
           });
-        });
-      } else {
-        showError('Trình duyệt không hỗ trợ HLS.');
+          
+          // Xử lý sự kiện phục hồi lỗi media
+          hls.on(Hls.Events.ERROR, function (event, data) {
+            console.error('HLS error during recovery:', data);
+            
+            // Thử phục hồi lỗi media tự động
+            if (data.fatal && data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              if (data.details === Hls.ErrorDetails.BUFFER_APPEND_ERROR) {
+                console.log('Trying to recover from buffer append error...');
+                hls.recoverMediaError();
+              } else {
+                console.log('Trying to recover from media error...');
+                hls.recoverMediaError();
+              }
+            }
+            
+            // Nếu lỗi mạng nghiêm trọng và đã hết số lần thử, hiển thị lỗi
+            if (data.fatal && data.type === Hls.ErrorTypes.NETWORK_ERROR && recoveryAttempts >= MAX_RECOVERY_ATTEMPTS) {
+              let errorMsg = 'Lỗi mạng khi tải stream.';
+              let details = {
+                type: data.type,
+                details: data.details,
+                url: data.context ? data.context.url : 'unknown',
+                response: data.response ? 
+                  { code: data.response.code, text: data.response.text } : 'Không có phản hồi'
+              };
+              
+              showError(errorMsg, details);
+            }
+          });
+
+          // Thêm báo cáo phục hồi thành công
+          hls.on(Hls.Events.FRAG_LOADED, function() {
+            if (recoveryAttempts > 0) {
+              hideError();
+              recoveryAttempts = 0;
+            }
+          });
+        }
+      } catch (e) {
+        console.error('Error during recovery:', e);
+        showError('Lỗi không thể khắc phục', {message: e.message});
       }
     }
     
@@ -759,6 +868,164 @@
     function updateUrlHash(url) {
       if (url) {
         window.location.hash = encodeURIComponent(url);
+      }
+    }
+
+    // Chuyển đổi tab
+    function switchTab(tabName) {
+      // Xóa trạng thái active cho tất cả tab
+      document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+      
+      // Thêm active cho tab được chọn
+      document.querySelector(`.tab:nth-child(${tabName === 'history' ? 1 : (tabName === 'info' ? 2 : 3)})`).classList.add('active');
+      document.getElementById(`${tabName}-tab`).classList.add('active');
+    }
+
+    // Cập nhật thông tin stream
+    function updateStreamInfo(manifest) {
+      const streamInfo = document.getElementById('stream-info');
+      
+      if (!manifest || !manifest.levels) {
+        streamInfo.innerHTML = '<p>Không có thông tin stream.</p>';
+        return;
+      }
+      
+      let infoHTML = '<div>';
+      
+      infoHTML += `<p><strong>Số lượng chất lượng:</strong> ${manifest.levels.length}</p>`;
+      
+      manifest.levels.forEach((level, index) => {
+        infoHTML += `
+          <div class="stream-quality">
+            <p><strong>Chất lượng #${index + 1}:</strong></p>
+            <p>Độ phân giải: ${level.width}x${level.height}</p>
+            <p>Bitrate: ${Math.round(level.bitrate / 1000)} kbps</p>
+            <p>Codec: ${level.codecSet || 'Không rõ'}</p>
+          </div>
+        `;
+      });
+      
+      infoHTML += '</div>';
+      streamInfo.innerHTML = infoHTML;
+    }
+
+    function loadStream() {
+      // Hủy instance HLS hiện tại nếu có
+      if (currentHls) {
+        currentHls.destroy();
+        currentHls = null;
+      }
+      
+      // Reset số lần thử khôi phục
+      recoveryAttempts = 0;
+      
+      const url = document.getElementById('m3u8-url').value.trim();
+      if (!url) {
+        alert('Vui lòng nhập URL .m3u8');
+        return;
+      }
+      
+      // Ẩn thông báo lỗi cũ
+      hideError();
+      
+      // Cập nhật thông tin stream
+      document.getElementById('stream-info').innerHTML = '<p>Đang tải thông tin stream...</p>';
+      
+      // Thêm vào lịch sử
+      addToHistory(url);
+      
+      // Cập nhật hash
+      updateUrlHash(url);
+
+      if (Hls.isSupported()) {
+        const hls = new Hls({
+          debug: true,
+          // Các cài đặt mặc định cho trình phát
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          manifestLoadingMaxRetry: 4,
+          manifestLoadingRetryDelay: 1000
+        });
+        
+        currentHls = hls;
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        
+        hls.on(Hls.Events.MANIFEST_PARSED, function (event, data) {
+          if (settings.autoplay) {
+            video.play().catch(e => {
+              console.warn('Không thể tự động phát: ', e);
+              showError('Không thể tự động phát', 
+                'Trình duyệt chặn tự động phát. Hãy nhấn nút play trên video để bắt đầu.');
+            });
+          }
+          
+          updateStreamInfo(hls.manifest);
+        });
+        
+        hls.on(Hls.Events.ERROR, function (event, data) {
+          console.error('HLS error:', data);
+          
+          let errorMsg = 'Không thể phát luồng HLS.';
+          let details = null;
+          
+          if (data.fatal) {
+            switch(data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                errorMsg = 'Lỗi mạng khi tải stream.';
+                details = {
+                  type: data.type,
+                  details: data.details,
+                  url: data.context ? data.context.url : 'unknown',
+                  response: data.response ? 
+                    { code: data.response.code, text: data.response.text } : 'Không có phản hồi'
+                };
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                errorMsg = 'Lỗi media. Stream không hợp lệ hoặc bị hỏng.';
+                details = {
+                  type: 'mediaError',
+                  details: data.details
+                };
+                break;
+              default:
+                errorMsg = 'Lỗi không xác định.';
+                details = {
+                  type: data.type,
+                  details: data.details
+                };
+                break;
+            }
+            
+            showError(errorMsg, details);
+            
+            // Tự động thử khôi phục lỗi media
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              console.log('Trying to recover from media error...');
+              hls.recoverMediaError();
+            }
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = url;
+        video.addEventListener('loadedmetadata', function () {
+          if (settings.autoplay) {
+            video.play();
+          }
+          document.getElementById('stream-info').innerHTML = 
+            '<p>Đang sử dụng trình phát HLS tích hợp trình duyệt. Thông tin chi tiết không khả dụng.</p>';
+        });
+        
+        video.addEventListener('error', function(e) {
+          console.error('Video error:', video.error);
+          showError('Không thể phát video', {
+            code: video.error ? video.error.code : 'Không rõ',
+            message: video.error ? video.error.message : 'Không rõ'
+          });
+        });
+      } else {
+        showError('Trình duyệt không hỗ trợ HLS.');
       }
     }
   </script>
