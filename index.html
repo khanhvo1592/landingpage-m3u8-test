@@ -831,7 +831,9 @@
         levelLoadingMaxRetry: 6,
         levelLoadingRetryDelay: 1000,
         fragLoadingMaxRetry: 6,
-        fragLoadingRetryDelay: 1000
+        fragLoadingRetryDelay: 1000,
+        // Tắt một số tính năng
+        enableWorker: false
       };
       
       // Nếu gặp lỗi về video SourceBuffer, thêm các tùy chọn đặc biệt
@@ -846,15 +848,27 @@
           progressive: false,
           lowLatencyMode: false,
           backBufferLength: 90,
-          appendErrorMaxRetry: 5,
+          appendErrorMaxRetry: 15,
           forceKeyFrameOnDiscontinuity: false,
           // Thử phát mà không cần video track
-          preferManagedMediaSource: false
+          preferManagedMediaSource: false,
+          ignoreSingleMediaStreamCodecError: true
         };
+        
+        // Bật chế độ stream audio-only trong cài đặt
+        const audioOnlyCheckbox = document.getElementById('audio-only-mode-setting');
+        if (audioOnlyCheckbox) {
+          audioOnlyCheckbox.checked = true;
+          updateAdvancedSettings();
+        }
         
         // Cập nhật thông tin
         console.log('Áp dụng cấu hình đặc biệt cho stream có thể là audio-only');
       }
+      
+      // Áp dụng cài đặt nâng cao
+      hlsConfig = applyAdvancedSettings(hlsConfig);
+      console.log('Khắc phục với cấu hình:', hlsConfig);
       
       try {
         if (Hls.isSupported()) {
@@ -889,9 +903,34 @@
             
             // Thử phục hồi lỗi media tự động
             if (data.fatal && data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-              if (data.details === Hls.ErrorDetails.BUFFER_APPEND_ERROR) {
-                console.log('Trying to recover from buffer append error...');
+              console.log('Trying to recover from media error:', data.details);
+              
+              if (data.details === "bufferStalledError") {
+                // Khắc phục lỗi buffer stalled
+                console.log('Trying to seek slightly forward to recover from stalled buffer');
+                video.currentTime += 0.1;
                 hls.recoverMediaError();
+              } else if (data.details === Hls.ErrorDetails.BUFFER_APPEND_ERROR) {
+                console.log('Trying to recover from buffer append error...');
+                
+                // Thử phát với cài đặt khác
+                setTimeout(() => {
+                  hls.recoverMediaError();
+                  
+                  // Nếu không thành công, thử tải lại với cấu hình audio-only
+                  setTimeout(() => {
+                    if (video.paused) {
+                      console.log('Vẫn bị lỗi sau khi thử phục hồi, áp dụng chế độ audio-only');
+                      // Bật tùy chọn audio-only
+                      const audioOnlyCheckbox = document.getElementById('audio-only-mode-setting');
+                      if (audioOnlyCheckbox) {
+                        audioOnlyCheckbox.checked = true;
+                        updateAdvancedSettings();
+                        loadStream(); // Tải lại stream
+                      }
+                    }
+                  }, 2000);
+                }, 500);
               } else {
                 console.log('Trying to recover from media error...');
                 hls.recoverMediaError();
@@ -914,11 +953,10 @@
           });
 
           // Thêm báo cáo phục hồi thành công
-          hls.on(Hls.Events.FRAG_LOADED, function() {
-            if (recoveryAttempts > 0) {
-              hideError();
-              recoveryAttempts = 0;
-            }
+          hls.on(Hls.Events.FRAG_BUFFERED, function() {
+            console.log('Fragment buffered, phục hồi có thể đã thành công');
+            hideError();
+            recoveryAttempts = 0;
           });
         }
       } catch (e) {
@@ -936,6 +974,17 @@
     window.addEventListener('DOMContentLoaded', () => {
       loadSettings();
       renderHistory();
+      addAdvancedSettings();
+      
+      // Thêm theo dõi sự kiện để xử lý stream phát thành công
+      video.addEventListener('playing', function() {
+        // Nếu video đang phát thành công, ẩn thông báo lỗi
+        console.log('Video đang phát thành công, ẩn thông báo lỗi nếu có');
+        hideError();
+        
+        // Đánh dấu đã phục hồi thành công
+        recoveryAttempts = 0;
+      });
       
       // Kiểm tra URL trong hash (nếu có)
       const hashUrl = window.location.hash.slice(1);
@@ -1038,20 +1087,35 @@
       updateUrlHash(url);
 
       if (Hls.isSupported()) {
-        const hls = new Hls({
+        // Tạo cấu hình nâng cao để giải quyết các vấn đề phổ biến
+        // đặc biệt là vấn đề "bufferAppendError"
+        const hlsConfig = {
           debug: true,
-          // Các cài đặt mặc định cho trình phát
+          // Cấu hình buffer
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
+          maxBufferSize: 60 * 1000 * 1000, // 60MB
+          // Tối ưu cho stream audio-only
+          appendErrorMaxRetry: 10, // Số lần thử lại tối đa khi gặp lỗi append
+          liveSyncDuration: 3, // Giảm độ trễ
+          liveMaxLatencyDuration: 10,
+          backBufferLength: 90,
+          // Cài đặt để tránh lỗi khi làm việc với các loại codec khác nhau
+          ignoreSingleMediaStreamCodecError: true,
+          // Cài đặt thử lại khi gặp lỗi
           manifestLoadingMaxRetry: 4,
           manifestLoadingRetryDelay: 1000,
-          // Thêm cấu hình để xử lý stream chỉ có audio
-          enableWorker: true,
-          forceKeyFrameOnDiscontinuity: false,
-          // Xử lý audio-only streams
+          // Tắt một số tính năng có thể gây lỗi
+          enableWorker: false, // Tắt worker để tránh lỗi với một số stream
+          // Xử lý đặc biệt với các stream audio-only
           altAudioCodec: 'mp4a.40.2'
-        });
+        };
         
+        // Áp dụng cài đặt nâng cao nếu có
+        const finalConfig = applyAdvancedSettings(hlsConfig);
+        console.log('Sử dụng cấu hình HLS:', finalConfig);
+        
+        const hls = new Hls(finalConfig);
         currentHls = hls;
         
         // Thêm sự kiện xử lý manifest đã tải
@@ -1074,19 +1138,28 @@
               type: 'info',
               message: 'Stream này chỉ chứa audio mà không có video. Player sẽ tự động điều chỉnh để phát audio.'
             });
+            
+            // Bật tùy chọn đặc biệt cho stream audio-only
+            try {
+              hls.audioTracks.forEach(track => {
+                console.log('Tìm thấy audio track:', track);
+              });
+              
+              // Thử tắt video track nếu có thể
+              hls.audioTrack = 0;
+              console.log('Đã chọn audio track đầu tiên');
+            } catch (e) {
+              console.error('Lỗi khi cố gắng xử lý audio track:', e);
+            }
           } else {
             video.classList.remove('audio-only-stream');
           }
         });
         
-        // Thêm theo dõi sự kiện để xử lý stream phát thành công
-        video.addEventListener('playing', function() {
-          // Nếu video đang phát thành công, ẩn thông báo lỗi
-          console.log('Video đang phát thành công, ẩn thông báo lỗi nếu có');
+        // Sự kiện xử lý hình ảnh đầu tiên được render
+        hls.on(Hls.Events.FRAG_BUFFERED, function() {
+          // Ẩn thông báo lỗi khi fragment đầu tiên được buffer thành công
           hideError();
-          
-          // Đánh dấu đã phục hồi thành công
-          recoveryAttempts = 0;
         });
         
         hls.loadSource(url);
@@ -1134,12 +1207,45 @@
                 };
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
-                errorMsg = 'Lỗi media. Stream không hợp lệ hoặc bị hỏng.';
-                details = {
-                  type: 'mediaError',
-                  details: data.details,
-                  sourceBufferName: data.sourceBufferName || 'unknown'
-                };
+                if (data.details === "bufferAppendError") {
+                  // Xử lý đặc biệt cho lỗi bufferAppendError
+                  if (data.sourceBufferName === "video") {
+                    errorMsg = 'Phát hiện stream có thể chỉ chứa audio.';
+                    console.log('Đang thử cấu hình đặc biệt cho stream chỉ chứa audio...');
+                    
+                    // Tự động phục hồi lỗi này mà không hiển thị thông báo
+                    setTimeout(() => {
+                      hls.recoverMediaError();
+                      
+                      // Sau khi thử khắc phục, hãy kiểm tra xem video có đang phát không
+                      setTimeout(() => {
+                        if (!video.paused && video.currentTime > 0) {
+                          hideError();
+                        }
+                      }, 1000);
+                    }, 10);
+                    
+                    // Người dùng có thể vẫn thấy stream phát bình thường
+                    details = {
+                      type: 'info',
+                      message: 'Stream có thể chỉ chứa audio mà không có video. Nếu bạn vẫn nghe được âm thanh, hãy bỏ qua thông báo này.'
+                    };
+                  } else {
+                    errorMsg = 'Lỗi khi xử lý stream.';
+                    details = {
+                      type: 'mediaError',
+                      details: data.details,
+                      sourceBufferName: data.sourceBufferName || 'unknown'
+                    };
+                  }
+                } else {
+                  errorMsg = 'Lỗi media. Stream không hợp lệ hoặc bị hỏng.';
+                  details = {
+                    type: 'mediaError',
+                    details: data.details,
+                    sourceBufferName: data.sourceBufferName || 'unknown'
+                  };
+                }
                 break;
               default:
                 errorMsg = 'Lỗi không xác định.';
@@ -1212,16 +1318,95 @@
       }
     });
     
-    // Thêm theo dõi sự kiện để xử lý stream phát thành công
-    video.addEventListener('playing', function() {
-      // Nếu video đang phát thành công, ẩn thông báo lỗi
-      setTimeout(() => {
-        if (!video.paused && video.currentTime > 0) {
-          console.log('Video đang phát thành công, ẩn thông báo lỗi nếu có');
-          hideError();
-        }
-      }, 1000);
-    });
+    // Thêm các tùy chọn nâng cao vào cài đặt
+    // Thêm cài đặt mới
+    const settingContainer = document.querySelector('.settings-container');
+    
+    // Thêm phần tùy chọn nâng cao vào trang
+    function addAdvancedSettings() {
+      // Tạo phần tử mới cho cài đặt nâng cao
+      const advancedSection = document.createElement('div');
+      advancedSection.innerHTML = `
+        <h3 style="margin-top: 20px;">Cài đặt nâng cao</h3>
+        <div class="setting-row">
+          <span class="setting-label">Tắt Worker (giúp với lỗi bufferAppendError)</span>
+          <input type="checkbox" id="disable-worker-setting">
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Chế độ stream chỉ có audio</span>
+          <input type="checkbox" id="audio-only-mode-setting">
+        </div>
+        <div class="setting-row">
+          <span class="setting-label">Số lần thử lại tối đa</span>
+          <select id="retry-attempts-setting">
+            <option value="3">3</option>
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="15">15</option>
+          </select>
+        </div>
+      `;
+      
+      // Thêm vào trang
+      settingContainer.appendChild(advancedSection);
+      
+      // Thêm sự kiện cho các cài đặt mới
+      document.getElementById('disable-worker-setting').addEventListener('change', updateAdvancedSettings);
+      document.getElementById('audio-only-mode-setting').addEventListener('change', updateAdvancedSettings);
+      document.getElementById('retry-attempts-setting').addEventListener('change', updateAdvancedSettings);
+      
+      // Tải cài đặt nâng cao từ localStorage nếu có
+      loadAdvancedSettings();
+    }
+    
+    // Tải cài đặt nâng cao
+    function loadAdvancedSettings() {
+      const savedAdvancedSettings = JSON.parse(localStorage.getItem('m3u8AdvancedSettings'));
+      if (savedAdvancedSettings) {
+        document.getElementById('disable-worker-setting').checked = savedAdvancedSettings.disableWorker || false;
+        document.getElementById('audio-only-mode-setting').checked = savedAdvancedSettings.audioOnlyMode || false;
+        document.getElementById('retry-attempts-setting').value = savedAdvancedSettings.retryAttempts || "10";
+      }
+    }
+    
+    // Cập nhật cài đặt nâng cao
+    function updateAdvancedSettings() {
+      const advancedSettings = {
+        disableWorker: document.getElementById('disable-worker-setting').checked,
+        audioOnlyMode: document.getElementById('audio-only-mode-setting').checked,
+        retryAttempts: document.getElementById('retry-attempts-setting').value
+      };
+      
+      localStorage.setItem('m3u8AdvancedSettings', JSON.stringify(advancedSettings));
+      console.log('Đã lưu cài đặt nâng cao:', advancedSettings);
+    }
+    
+    // Áp dụng cài đặt nâng cao vào cấu hình HLS
+    function applyAdvancedSettings(config) {
+      const advancedSettings = JSON.parse(localStorage.getItem('m3u8AdvancedSettings')) || {};
+      
+      if (advancedSettings.disableWorker) {
+        config.enableWorker = false;
+      }
+      
+      if (advancedSettings.audioOnlyMode) {
+        // Cài đặt đặc biệt cho stream audio-only
+        config.appendErrorMaxRetry = 15;
+        config.backBufferLength = 120;
+        config.progressive = false;
+        config.forceKeyFrameOnDiscontinuity = false;
+      }
+      
+      if (advancedSettings.retryAttempts) {
+        const retries = parseInt(advancedSettings.retryAttempts);
+        config.manifestLoadingMaxRetry = retries;
+        config.levelLoadingMaxRetry = retries;
+        config.fragLoadingMaxRetry = retries;
+        config.appendErrorMaxRetry = retries;
+      }
+      
+      return config;
+    }
   </script>
 </body>
 </html>
