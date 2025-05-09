@@ -245,6 +245,16 @@
       margin-top: var(--spacing-md);
     }
 
+    .error-container.info {
+      background-color: rgba(33, 150, 243, 0.1);
+      border-color: #2196F3;
+      color: #a7d8ff;
+    }
+
+    .error-container.info h3::before {
+      content: "ℹ️ ";
+    }
+
     .error-container pre {
       margin-top: var(--spacing-sm);
       background-color: rgba(0, 0, 0, 0.2);
@@ -418,6 +428,8 @@
       <div class="error-actions">
         <button onclick="recoverStream()">Thử khắc phục</button>
         <button class="secondary" onclick="changeSettings()">Đổi cài đặt</button>
+        <button id="dismiss-error-btn" class="secondary" onclick="hideError()" style="display: none;">Bỏ qua</button>
+        <button id="ignore-error-btn" class="secondary" onclick="ignoreErrorAndContinue()" style="display: none;">Tiếp tục phát</button>
       </div>
     </div>
 
@@ -489,15 +501,12 @@
     // Khởi tạo lịch sử
     let history = JSON.parse(localStorage.getItem('m3u8History')) || [];
     
-    // Đồng hồ Việt Nam
+    // Đồng hồ hệ thống
     function updateClock() {
       const now = new Date();
-      // Chuyển đổi sang múi giờ Việt Nam (UTC+7)
-      const vnTime = new Date(now.getTime() + (7 * 60 * 60 * 1000 - now.getTimezoneOffset() * 60 * 1000));
-      
-      const hours = vnTime.getHours().toString().padStart(2, '0');
-      const minutes = vnTime.getMinutes().toString().padStart(2, '0');
-      const seconds = vnTime.getSeconds().toString().padStart(2, '0');
+      const hours = now.getHours().toString().padStart(2, '0');
+      const minutes = now.getMinutes().toString().padStart(2, '0'); 
+      const seconds = now.getSeconds().toString().padStart(2, '0');
       
       document.getElementById('vn-clock').textContent = `${hours}:${minutes}:${seconds}`;
     }
@@ -654,11 +663,34 @@
       document.getElementById('hls-version').value = settings.hlsVersion;
     }
     
+    // Thêm hàm mới để bỏ qua lỗi và tiếp tục phát
+    function ignoreErrorAndContinue() {
+      hideError();
+      
+      // Đánh dấu là đã bỏ qua lỗi để không hiển thị lại
+      window._ignoredErrorsForCurrentStream = true;
+      
+      // Thử phát lại video nếu chưa phát
+      if (video.paused) {
+        video.play().catch(e => {
+          console.warn('Không thể phát video sau khi bỏ qua lỗi: ', e);
+        });
+      }
+    }
+
     // Hiển thị thông tin lỗi
     function showError(title, details) {
+      // Nếu đã bỏ qua lỗi cho stream hiện tại, không hiển thị lại
+      if (window._ignoredErrorsForCurrentStream) {
+        console.log('Bỏ qua hiển thị lỗi vì người dùng đã chọn tiếp tục phát');
+        return;
+      }
+      
       const errorContainer = document.getElementById('error-container');
       const errorDetails = document.getElementById('error-details');
       const errorSolution = document.getElementById('error-solution');
+      const dismissBtn = document.getElementById('dismiss-error-btn');
+      const ignoreBtn = document.getElementById('ignore-error-btn');
       
       errorContainer.style.display = 'block';
       errorDetails.innerHTML = `<p><strong>${title}</strong></p>`;
@@ -670,23 +702,54 @@
       // Hiển thị gợi ý giải pháp dựa trên loại lỗi
       let solutionHtml = '';
       
+      // Kiểm tra xem video có đang phát không
+      const isVideoPlaying = !video.paused && video.currentTime > 0;
+      
+      // Hiển thị nút 'Tiếp tục phát' nếu video đang phát dù có lỗi
+      ignoreBtn.style.display = isVideoPlaying ? 'block' : 'none';
+      
+      if (details && details.type === 'info') {
+        // Thông báo thông tin, không phải lỗi
+        errorContainer.classList.add('info');
+        errorSolution.innerHTML = '';
+        dismissBtn.style.display = 'block'; // Hiển thị nút bỏ qua cho thông tin
+        ignoreBtn.style.display = 'none';
+        return;
+      } else {
+        // Khôi phục style lỗi
+        errorContainer.classList.remove('info');
+        dismissBtn.style.display = 'none';
+      }
+      
       if (details && details.type === 'mediaError') {
-        solutionHtml = `
-          <p><strong>Giải pháp có thể:</strong></p>
-          <ul>
-            <li>Kiểm tra lại URL stream (có thể URL đã hết hạn)</li>
-            <li>Kiểm tra kết nối mạng của bạn</li>
-            <li>Stream có thể yêu cầu quyền truy cập (CORS/cookie)</li>
-            <li>Thử chuyển sang phiên bản HLS.js khác</li>
-            <li>Liên hệ quản trị viên nếu đây là stream nội bộ</li>
-          </ul>
-        `;
+        if (details.details === 'bufferAppendError' && details.sourceBufferName === 'video') {
+          solutionHtml = `
+            <p><strong>Nguyên nhân và giải pháp:</strong></p>
+            <ul>
+              <li>Lỗi "Attempting to append to the video SourceBuffer, but it does not exist" thường xảy ra với stream chỉ chứa audio mà không có video.</li>
+              <li>Hệ thống sẽ tự động thử phát audio mà không cần video.</li>
+              <li>Nếu cần, bạn có thể thử chuyển sang phiên bản HLS.js cũ hơn (như phiên bản 1.3.5).</li>
+              <li>Đôi khi stream yêu cầu sử dụng trình phát cụ thể, thử phát trực tiếp trên trình duyệt Safari hoặc iOS.</li>
+            </ul>
+          `;
+        } else {
+          solutionHtml = `
+            <p><strong>Gợi ý giải pháp:</strong></p>
+            <ul>
+              <li>Kiểm tra lại URL stream (có thể URL đã hết hạn)</li>
+              <li>Kiểm tra kết nối mạng của bạn</li>
+              <li>Stream có thể yêu cầu quyền truy cập (CORS/cookie)</li>
+              <li>Thử chuyển sang phiên bản HLS.js khác</li>
+              <li>Liên hệ quản trị viên nếu đây là stream nội bộ</li>
+            </ul>
+          `;
+        }
         
         // Tự động thử khôi phục với lỗi media
-        setTimeout(() => recoverStream(), 2000);
+        setTimeout(() => recoverStream(details), 2000);
       } else if (details && details.type === Hls.ErrorTypes.NETWORK_ERROR) {
         solutionHtml = `
-          <p><strong>Giải pháp có thể:</strong></p>
+          <p><strong>Gợi ý giải pháp:</strong></p>
           <ul>
             <li>Kiểm tra kết nối internet của bạn</li>
             <li>Kiểm tra URL có chính xác không</li>
@@ -697,7 +760,7 @@
         `;
       } else {
         solutionHtml = `
-          <p><strong>Giải pháp chung:</strong></p>
+          <p><strong>Gợi ý chung:</strong></p>
           <ul>
             <li>Làm mới trang và thử lại</li>
             <li>Kiểm tra URL stream có đúng định dạng .m3u8 không</li>
@@ -711,7 +774,9 @@
     
     // Ẩn thông tin lỗi
     function hideError() {
-      document.getElementById('error-container').style.display = 'none';
+      const errorContainer = document.getElementById('error-container');
+      errorContainer.style.display = 'none';
+      errorContainer.classList.remove('info');
     }
 
     // Mở tab cài đặt
@@ -723,7 +788,7 @@
     let recoveryAttempts = 0;
     const MAX_RECOVERY_ATTEMPTS = 3;
 
-    function recoverStream() {
+    function recoverStream(errorData) {
       const url = document.getElementById('m3u8-url').value.trim();
       if (!url) return;
       
@@ -737,8 +802,8 @@
       recoveryAttempts++;
       
       // Thêm indicator đang khôi phục
-      const errorDetails = document.getElementById('error-details');
-      errorDetails.innerHTML += `
+      const errorDetailsEl = document.getElementById('error-details');
+      errorDetailsEl.innerHTML += `
         <p style="margin-top: 10px;">
           <span class="recovery-indicator"></span>
           Đang thử khắc phục lần ${recoveryAttempts}/${MAX_RECOVERY_ATTEMPTS}...
@@ -752,7 +817,7 @@
       }
       
       // Khởi tạo lại với cài đặt khác
-      const hlsConfig = {
+      let hlsConfig = {
         debug: true,
         // Các cài đặt để tăng khả năng phục hồi
         maxBufferLength: 30,
@@ -768,6 +833,28 @@
         fragLoadingMaxRetry: 6,
         fragLoadingRetryDelay: 1000
       };
+      
+      // Nếu gặp lỗi về video SourceBuffer, thêm các tùy chọn đặc biệt
+      if (errorData && errorData.details === 'bufferAppendError' && 
+          errorData.sourceBufferName === 'video') {
+            
+        // Cấu hình đặc biệt cho stream audio-only
+        hlsConfig = {
+          ...hlsConfig,
+          enableWorker: false, // Tắt worker để dễ debug
+          // Có thể là stream audio-only, cố gắng xử lý
+          progressive: false,
+          lowLatencyMode: false,
+          backBufferLength: 90,
+          appendErrorMaxRetry: 5,
+          forceKeyFrameOnDiscontinuity: false,
+          // Thử phát mà không cần video track
+          preferManagedMediaSource: false
+        };
+        
+        // Cập nhật thông tin
+        console.log('Áp dụng cấu hình đặc biệt cho stream có thể là audio-only');
+      }
       
       try {
         if (Hls.isSupported()) {
@@ -793,6 +880,12 @@
           // Xử lý sự kiện phục hồi lỗi media
           hls.on(Hls.Events.ERROR, function (event, data) {
             console.error('HLS error during recovery:', data);
+            
+            // Kiểm tra nếu video đang phát, không hiển thị lỗi cho một số lỗi không nghiêm trọng
+            if (data.details === "bufferAppendError" && !video.paused && video.currentTime > 0) {
+              console.log('Bỏ qua lỗi bufferAppendError vì stream vẫn đang phát bình thường');
+              return;
+            }
             
             // Thử phục hồi lỗi media tự động
             if (data.fatal && data.type === Hls.ErrorTypes.MEDIA_ERROR) {
@@ -920,6 +1013,12 @@
       // Reset số lần thử khôi phục
       recoveryAttempts = 0;
       
+      // Đặt lại cờ bỏ qua lỗi khi tải stream mới
+      window._ignoredErrorsForCurrentStream = false;
+      
+      // Đặt lại biến theo dõi kiểm tra video đã bắt đầu
+      video._checkStarted = false;
+      
       const url = document.getElementById('m3u8-url').value.trim();
       if (!url) {
         alert('Vui lòng nhập URL .m3u8');
@@ -945,10 +1044,51 @@
           maxBufferLength: 30,
           maxMaxBufferLength: 60,
           manifestLoadingMaxRetry: 4,
-          manifestLoadingRetryDelay: 1000
+          manifestLoadingRetryDelay: 1000,
+          // Thêm cấu hình để xử lý stream chỉ có audio
+          enableWorker: true,
+          forceKeyFrameOnDiscontinuity: false,
+          // Xử lý audio-only streams
+          altAudioCodec: 'mp4a.40.2'
         });
         
         currentHls = hls;
+        
+        // Thêm sự kiện xử lý manifest đã tải
+        hls.on(Hls.Events.MANIFEST_LOADED, function(event, data) {
+          console.log('Manifest loaded:', data);
+          
+          // Kiểm tra xem manifest có chứa video track hay không
+          const hasVideo = data.levels.some(level => 
+            level.videoCodec !== undefined || 
+            (level.codecSet && level.codecSet.toLowerCase().includes('avc'))
+          );
+          
+          if (!hasVideo) {
+            console.log('Phát hiện stream chỉ chứa audio (không có video). Áp dụng cấu hình đặc biệt.');
+            // Thêm một class để xử lý giao diện cho stream audio-only
+            video.classList.add('audio-only-stream');
+            
+            // Thông báo cho người dùng
+            showError('Thông báo: Stream chỉ chứa audio', {
+              type: 'info',
+              message: 'Stream này chỉ chứa audio mà không có video. Player sẽ tự động điều chỉnh để phát audio.'
+            });
+          } else {
+            video.classList.remove('audio-only-stream');
+          }
+        });
+        
+        // Thêm theo dõi sự kiện để xử lý stream phát thành công
+        video.addEventListener('playing', function() {
+          // Nếu video đang phát thành công, ẩn thông báo lỗi
+          console.log('Video đang phát thành công, ẩn thông báo lỗi nếu có');
+          hideError();
+          
+          // Đánh dấu đã phục hồi thành công
+          recoveryAttempts = 0;
+        });
+        
         hls.loadSource(url);
         hls.attachMedia(video);
         
@@ -956,8 +1096,10 @@
           if (settings.autoplay) {
             video.play().catch(e => {
               console.warn('Không thể tự động phát: ', e);
-              showError('Không thể tự động phát', 
-                'Trình duyệt chặn tự động phát. Hãy nhấn nút play trên video để bắt đầu.');
+              showError('Thông báo: Cần tương tác người dùng', {
+                type: 'info',
+                message: 'Hầu hết các trình duyệt hiện đại yêu cầu tương tác người dùng trước khi tự động phát media có âm thanh. Đây là chính sách bảo vệ người dùng, không phải lỗi. Vui lòng nhấn nút "Play" trên video để bắt đầu phát.'
+              });
             });
           }
           
@@ -969,6 +1111,15 @@
           
           let errorMsg = 'Không thể phát luồng HLS.';
           let details = null;
+          
+          // Kiểm tra xem video đã phát được chưa
+          const isVideoActuallyPlaying = !video.paused && video.currentTime > 0;
+          
+          // Bỏ qua lỗi bufferAppendError nếu video vẫn đang phát
+          if (data.details === "bufferAppendError" && isVideoActuallyPlaying) {
+            console.log('Bỏ qua lỗi bufferAppendError vì stream vẫn đang phát bình thường');
+            return;
+          }
           
           if (data.fatal) {
             switch(data.type) {
@@ -986,7 +1137,8 @@
                 errorMsg = 'Lỗi media. Stream không hợp lệ hoặc bị hỏng.';
                 details = {
                   type: 'mediaError',
-                  details: data.details
+                  details: data.details,
+                  sourceBufferName: data.sourceBufferName || 'unknown'
                 };
                 break;
               default:
@@ -998,7 +1150,10 @@
                 break;
             }
             
-            showError(errorMsg, details);
+            // Hiển thị lỗi chỉ khi stream không thực sự phát được
+            if (!isVideoActuallyPlaying) {
+              showError(errorMsg, details);
+            }
             
             // Tự động thử khôi phục lỗi media
             if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
@@ -1011,7 +1166,13 @@
         video.src = url;
         video.addEventListener('loadedmetadata', function () {
           if (settings.autoplay) {
-            video.play();
+            video.play().catch(e => {
+              console.warn('Không thể tự động phát: ', e);
+              showError('Thông báo: Cần tương tác người dùng', {
+                type: 'info',
+                message: 'Hầu hết các trình duyệt hiện đại yêu cầu tương tác người dùng trước khi tự động phát media có âm thanh. Đây là chính sách bảo vệ người dùng, không phải lỗi. Vui lòng nhấn nút "Play" trên video để bắt đầu phát.'
+              });
+            });
           }
           document.getElementById('stream-info').innerHTML = 
             '<p>Đang sử dụng trình phát HLS tích hợp trình duyệt. Thông tin chi tiết không khả dụng.</p>';
@@ -1028,6 +1189,39 @@
         showError('Trình duyệt không hỗ trợ HLS.');
       }
     }
+
+    // Thêm bộ đếm thời gian để kiểm tra xem video có thực sự đang phát không
+    function checkIfVideoIsPlaying() {
+      const lastTime = video.currentTime;
+      
+      setTimeout(() => {
+        // Nếu thời gian hiện tại đã tăng, video đang phát
+        if (video.currentTime > lastTime + 0.5 && !video.paused) {
+          console.log('Video đang phát bình thường, ẩn thông báo lỗi nếu có');
+          hideError();
+        }
+      }, 2000);
+    }
+    
+    // Bắt đầu kiểm tra sau khi video bắt đầu chạy
+    video.addEventListener('timeupdate', function() {
+      // Chỉ chạy kiểm tra một lần khi video bắt đầu phát
+      if (video.currentTime > 0.5 && !video._checkStarted) {
+        video._checkStarted = true;
+        checkIfVideoIsPlaying();
+      }
+    });
+    
+    // Thêm theo dõi sự kiện để xử lý stream phát thành công
+    video.addEventListener('playing', function() {
+      // Nếu video đang phát thành công, ẩn thông báo lỗi
+      setTimeout(() => {
+        if (!video.paused && video.currentTime > 0) {
+          console.log('Video đang phát thành công, ẩn thông báo lỗi nếu có');
+          hideError();
+        }
+      }, 1000);
+    });
   </script>
 </body>
 </html>
